@@ -5,6 +5,7 @@ import serial
 import time
 from xbee import ZigBee
 import ZeroBorg
+import math
 
 leftstick_assignments = {'button': 'dio-4', 'x': 'adc-0', 'y': 'adc-1'}
 rightstick_assignments = {'button': 'dio-5', 'x': 'adc-2', 'y': 'adc-3'}
@@ -14,7 +15,6 @@ rightstick = {'button': False, 'x': 511, 'y': 511, 'xmin': 0, 'xmid': 511, 'xmax
 controllermovement = {'degree': 0, 'speed': 0, 'rotation': 0}
 calibrationdata = {'samples': 10, 'samplestaken': 0, 'leftxmid': {0: 0}, 'leftymid': {0: 0}, 'rightxmid': {0: 0}, 'rightymid': {0: 0}}
 axis_nullzone = 200
-controllerupdate = False
 calibrationmode = False
 
 # Functions
@@ -27,7 +27,6 @@ def controller_callback(data):
     """
     global leftstick
     global rightstick
-    global controllerupdate
     global controllermovement
     global axis_nullzone
     global calibrationmode
@@ -54,52 +53,13 @@ def controller_callback(data):
             rightstick['ymid'] = sum(calibrationdata['rightymid'].values()) / len(calibrationdata['rightymid'])
         return
 
-    # Temp storage for new values
-    triggerupdate = False
-    newleftstick = {}
-    newrightstick = {}
-
-    # Left Stick Button Handling
-    newleftstick['button'] = not bool(data['samples'][0][leftstick_assignments['button']])
-    if newleftstick['button'] != leftstick['button']:
-        leftstick['button'] = newleftstick['button']
-        triggerupdate = True
-
-    # Right Stick Button Handling
-    newrightstick['button'] = not bool(data['samples'][0][rightstick_assignments['button']])
-    if newrightstick['button'] != rightstick['button']:
-        rightstick['button'] = newrightstick['button']
-        triggerupdate = True
-
-    # Left X-Axis Handling
-    newleftstick['x'] = int(data['samples'][0][leftstick_assignments['x']])
-    if newleftstick['x'] < leftstick['x'] -axis_nullzone or leftstick['x'] + axis_nullzone < newleftstick['x']:
-        leftstick['x'] = newleftstick['x']
-        triggerupdate = True
-
-    # Left Y-Axis Handling
-    newleftstick['y'] = int(data['samples'][0][leftstick_assignments['y']])
-    if newleftstick['y'] < leftstick['y'] -axis_nullzone or leftstick['y'] + axis_nullzone < newleftstick['y']:
-        leftstick['y'] = newleftstick['y']
-        triggerupdate = True
-
-    # Right X-Axis Handling
-    newrightstick['x'] = int(data['samples'][0][rightstick_assignments['x']])
-    if newrightstick['x'] < rightstick['x'] -axis_nullzone or rightstick['x'] + axis_nullzone < newrightstick['x']:
-        rightstick['x'] = newrightstick['x']
-        triggerupdate = True
-
-    # Right Y-Axis Handling
-    newrightstick['y'] = int(data['samples'][0][rightstick_assignments['y']])
-    if newrightstick['y'] < rightstick['y'] -axis_nullzone or rightstick['y'] + axis_nullzone < newrightstick['y']:
-        rightstick['y'] = newrightstick['y']
-        triggerupdate = True
-
-
-    # If any updates have been made set this flag to ensure they are processed
-    if triggerupdate:
-        controllerupdate = True
-
+    # Basic stick values
+    leftstick['button'] = not bool(data['samples'][0][leftstick_assignments['button']])
+    rightstick['button'] = not bool(data['samples'][0][rightstick_assignments['button']])
+    leftstick['x'] = int(data['samples'][0][leftstick_assignments['x']])
+    leftstick['y'] = int(data['samples'][0][leftstick_assignments['y']])
+    rightstick['x'] = int(data['samples'][0][rightstick_assignments['x']])
+    rightstick['y'] = int(data['samples'][0][rightstick_assignments['y']])
 
 
 def calibratejoysticks():
@@ -117,6 +77,67 @@ def calibratejoysticks():
     print('Right Stick - X Axis - Mid point: ' + str(rightstick['xmid']))
     print('Right Stick - Y Axis - Mid point: ' + str(rightstick['ymid']))
     return
+
+def calc_controller_movement(stick):
+    movement = {}
+
+    # Stick X range and position
+    if stick['x'] >= stick['xmid']:
+        stickxrange = float(stick['xmax'] - stick['xmid'])
+        stickxpos = float(stick['x'] - stick['xmid'])
+    else:
+        stickxrange = float(stick['xmid'] - stick['xmin'])
+        stickxpos = float(stick['xmid'] - stick['x'])
+
+    # Stick Y range and position
+    if stick['y'] >= stick['ymid']:
+        stickyrange = float(stick['ymax'] - stick['ymid'])
+        stickypos = float(stick['y'] - stick['ymid'])
+    else:
+        stickyrange = float(stick['ymid'] - stick['ymin'])
+        stickypos = float(stick['ymid'] - stick['y'])
+
+    # Convert position to relative position
+    relx = 100 * stickxpos / stickxrange
+    rely = 100 * stickypos / stickyrange
+
+    movement['speed'] = -1
+
+    if stick['x'] >= stick['xmid'] and stick['y'] >= stick['ymid']:
+        # Handle 0 co-ordinates
+        if stickxpos == stickypos == 0:
+            movement['degree'] = 360
+            movement['speed'] = 0
+        elif stickxpos == 0:
+            movement['degree'] = 360
+            movement['speed'] = 100 * stickypos / stickyrange
+        elif stickypos == 0:
+            movement['degree'] = 90
+            movement['speed'] = 100 * stickxpos / stickxrange
+        else:
+            movement['degree'] = round(math.degrees(math.atan2(relx, rely)))
+
+
+    elif stick['x'] >= stick['xmid'] and stick['y'] < stick['ymid']:
+        # 90 to 180 degree
+        movement['degree'] = 90 + round(math.degrees(math.atan2(rely, relx)))
+
+    elif stick['x'] < stick['xmid'] and stick['y'] < stick['ymid']:
+        # 180 to 270 degree
+        movement['degree'] = 180 + round(math.degrees(math.atan2(relx, rely)))
+
+    else:
+        # 270 to 360 degree
+        movement['degree'] = 270 + round(math.degrees(math.atan2(rely, relx)))
+
+    # Calculate speed for most cases
+    if movement['speed'] == -1:
+        spos = round(math.hypot(rely, relx))
+        movement['speed'] = round(spos / 1.41421356237)  # 100 * math.hypot(100, 100))
+    return movement
+
+
+
 
 # Setup the Xbee
 serial_port = serial.Serial('/dev/ttyAMA0', 9600)
@@ -140,75 +161,82 @@ if not ZB.foundChip:
 #ZB.SetEpoIgnore(True)                 # Uncomment to disable EPO latch, needed if you do not have a switch / jumper
 # Ensure the communications failsafe has been enabled!
 failsafe = False
-#for i in range(5):
-#    ZB.SetCommsFailsafe(True)
-#    failsafe = ZB.GetCommsFailsafe()
-#    if failsafe:
-#        break
-#if not failsafe:
-#    print 'Board %02X failed to report in failsafe mode!' % (ZB.i2cAddress)
-#    sys.exit()
+for i in range(5):
+    ZB.SetCommsFailsafe(True)
+    failsafe = ZB.GetCommsFailsafe()
+    if failsafe:
+        break
+if not failsafe:
+    print 'Board %02X failed to report in failsafe mode!' % (ZB.i2cAddress)
+    sys.exit()
 ZB.ResetEpo()
 
+# Calibrate the joysticks
 calibratejoysticks()
 
 
 while True:
     try:
-        if controllerupdate == True:
-            # Speed + is anti-clockwise
-            # Speed - in clockwise
 
-            # Forward
-            if leftstick['x'] < leftstick['xmid'] - axis_nullzone:
-                 speed = 0.5
-                 ZB.SetMotor1(-speed)   # Front Right
-                 ZB.SetMotor2(-speed)   # Back Right
-                 ZB.SetMotor3(speed)    # Back Left
-                 ZB.SetMotor4(speed)    # Front Left
-            # Reverse
-            elif leftstick['x'] > leftstick['xmid'] + axis_nullzone:
-                speed = 0.5
-                ZB.SetMotor1(speed)  # Front Right
-                ZB.SetMotor2(speed)  # Back Right
-                ZB.SetMotor3(-speed)  # Back Left
-                ZB.SetMotor4(-speed)  # Front Left
-            # Left
-            elif leftstick['y'] < leftstick['ymid'] - axis_nullzone:
-                speed = 0.5
-                ZB.SetMotor1(-speed)  # Front Right
-                ZB.SetMotor2(speed)  # Back Right
-                ZB.SetMotor3(speed)  # Back Left
-                ZB.SetMotor4(-speed)  # Front Left
-            # Right
-            elif leftstick['y'] > leftstick['ymid'] + axis_nullzone:
-                speed = 0.5
-                ZB.SetMotor1(speed)  # Front Right
-                ZB.SetMotor2(-speed)  # Back Right
-                ZB.SetMotor3(-speed)  # Back Left
-                ZB.SetMotor4(speed)  # Front Left
-            # Spin Left
-            elif rightstick['y'] < rightstick['ymid'] - axis_nullzone:
-                speed = 0.5
-                ZB.SetMotor1(-speed)  # Front Right
-                ZB.SetMotor2(-speed)  # Back Right
-                ZB.SetMotor3(-speed)  # Back Left
-                ZB.SetMotor4(-speed)  # Front Left
-            # Spin Right
-            elif rightstick['y'] > rightstick['ymid'] + axis_nullzone:
-                speed = 0.5
-                ZB.SetMotor1(speed)  # Front Right
-                ZB.SetMotor2(speed)  # Back Right
-                ZB.SetMotor3(speed)  # Back Left
-                ZB.SetMotor4(speed)  # Front Left
-            else:
-                 ZB.MotorsOff()
+        # Speed + is anti-clockwise
+        # Speed - in clockwise
 
-            # Reset ControllerUpdate Variable
-            controllerupdate = False
+        movement = calc_controller_movement(leftstick)
+        speed = movement['speed'] / 100
 
-    #    try:
-            time.sleep(0.001)
+        if speed < 20:
+            speed = 0
+
+        # Forward
+        #if leftstick['x'] < leftstick['xmid'] - axis_nullzone:
+        if 315 < movement['degree'] or movement['degree'] < 45:
+             #speed = 0.5
+             ZB.SetMotor1(-speed)   # Front Right
+             ZB.SetMotor2(-speed)   # Back Right
+             ZB.SetMotor3(speed)    # Back Left
+             ZB.SetMotor4(speed)    # Front Left
+        # Reverse
+        #elif leftstick['x'] > leftstick['xmid'] + axis_nullzone:
+        elif 135 < movement['degree'] < 225:
+            #speed = 0.5
+            ZB.SetMotor1(speed)  # Front Right
+            ZB.SetMotor2(speed)  # Back Right
+            ZB.SetMotor3(-speed)  # Back Left
+            ZB.SetMotor4(-speed)  # Front Left
+        # Left
+        #elif leftstick['y'] < leftstick['ymid'] - axis_nullzone:
+        elif 225 < movement['degree'] < 315:
+            speed = 0.5
+            ZB.SetMotor1(-speed)  # Front Right
+            ZB.SetMotor2(speed)  # Back Right
+            ZB.SetMotor3(speed)  # Back Left
+            ZB.SetMotor4(-speed)  # Front Left
+        # Right
+        #elif leftstick['y'] > leftstick['ymid'] + axis_nullzone:
+        elif 45 < movement['degree'] < 135:
+            speed = 0.5
+            ZB.SetMotor1(speed)  # Front Right
+            ZB.SetMotor2(-speed)  # Back Right
+            ZB.SetMotor3(-speed)  # Back Left
+            ZB.SetMotor4(speed)  # Front Left
+        # Spin Left
+#        elif rightstick['y'] < rightstick['ymid'] - axis_nullzone:
+#            speed = 0.5
+#            ZB.SetMotor1(-speed)  # Front Right
+#            ZB.SetMotor2(-speed)  # Back Right
+#            ZB.SetMotor3(-speed)  # Back Left
+#            ZB.SetMotor4(-speed)  # Front Left
+        # Spin Right
+#        elif rightstick['y'] > rightstick['ymid'] + axis_nullzone:
+#            speed = 0.5
+#            ZB.SetMotor1(speed)  # Front Right
+#            ZB.SetMotor2(speed)  # Back Right
+#            ZB.SetMotor3(speed)  # Back Left
+#            ZB.SetMotor4(speed)  # Front Left
+        else:
+             ZB.MotorsOff()
+
+        time.sleep(0.001)
     except KeyboardInterrupt:
         break
 
